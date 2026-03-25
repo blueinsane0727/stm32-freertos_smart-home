@@ -1,0 +1,15 @@
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/timers.c
+my_freertos\timers.o: D:\keil5\ARM\ARMCC\Bin\..\include\stdlib.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
+my_freertos\timers.o: D:\keil5\ARM\ARMCC\Bin\..\include\stddef.h
+my_freertos\timers.o: D:\keil5\ARM\ARMCC\Bin\..\include\stdint.h
+my_freertos\timers.o: ../Core/Inc/FreeRTOSConfig.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/portable.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM3/portmacro.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/task.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h
+my_freertos\timers.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/timers.h
