@@ -40,12 +40,15 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+// 定义一个枚举类型用于区分传感器数据的类型
 typedef enum
 {
   data_type_dht11,
   data_type_light
 }data_type;   
 
+// 定义一个联合体用于存储不同类型的传感器数据
 typedef struct
 {
   data_type type;
@@ -59,12 +62,12 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define Queue_Length    5
-#define Queue_Timeout   100
+#define Queue_Length    5               // 传感器数据队列长度
+#define Queue_Timeout   100             // 发送数据到队列的超时时间（ms） 
 
-#define Event_Light_Turn  (1UL << 0)
-#define Event_Light_On    (1UL << 1)
-#define Event_Light_Off   (1UL << 2)
+#define Event_Light_Turn  (1UL << 0)    // 事件组位：LED状态切换事件
+#define Event_Light_On    (1UL << 1)    // 事件组位：LED开事件
+#define Event_Light_Off   (1UL << 2)    // 事件组位：LED关事件
 
 TaskHandle_t ledTaskHandle;
 TaskHandle_t SensorTaskHandle;
@@ -72,6 +75,7 @@ TaskHandle_t DisplayTaskHandle;
 TaskHandle_t KeyTaskHandle;
 TaskHandle_t ControlLedTaskHandle = NULL;
 TaskHandle_t ControlFanTaskHandle = NULL;
+TaskHandle_t ConnectWifiTaskHandle = NULL;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -81,15 +85,15 @@ TaskHandle_t ControlFanTaskHandle = NULL;
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-QueueHandle_t Sensor_Queue;
-QueueHandle_t Key_Queueset;
+QueueHandle_t Sensor_Queue;           // 传感器数据队列句柄
+QueueHandle_t Key_Queueset;           // 按键事件队列集句柄
 
-SemaphoreHandle_t Key1_Semaphore;
-SemaphoreHandle_t Key2_Semaphore;
-SemaphoreHandle_t Esp_RxSem;
-SemaphoreHandle_t Post_Mutex;
+SemaphoreHandle_t Key1_Semaphore;     // 按键1信号量
+SemaphoreHandle_t Key2_Semaphore;     // 按键2信号量
+SemaphoreHandle_t Esp_RxSem;          // ESP8266接收信号量
+SemaphoreHandle_t Post_Mutex;         // 上传数据互斥量
 
-EventGroupHandle_t Light_EventGroup;
+EventGroupHandle_t Light_EventGroup;  // LED事件组句柄，用于控制LED状态切换、开、关事件
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -203,16 +207,19 @@ void StartDefaultTask(void *argument)
             (void* )NULL, 
             (UBaseType_t )5,
             (TaskHandle_t* )&ControlLedTaskHandle);
-  xResult = xTaskCreate((TaskFunction_t)Control_Fan_Task,
+  xTaskCreate((TaskFunction_t)Control_Fan_Task,
             (const char* )"Control_Fan_Task", 
             (uint16_t )128, 
             (void* )NULL, 
             (UBaseType_t )5,
             (TaskHandle_t* )&ControlFanTaskHandle);
-	if(xResult == pdFALSE)
-  {
-    OLED_PrintString(0,7,"error");
-  }
+  xTaskCreate((TaskFunction_t)Connect_Wifi_Task,
+            (const char* )"Connect_Wifi_Task", 
+            (uint16_t )256, 
+            (void* )NULL, 
+            (UBaseType_t )5,
+            (TaskHandle_t* )&ConnectWifiTaskHandle);
+
 	vTaskDelete(NULL); 
   /* Infinite loop */
   for(;;)
@@ -224,6 +231,11 @@ void StartDefaultTask(void *argument)
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 
+/**
+  * @brief  GPIO中断回调函数，由HAL库在GPIO中断发生时调用，根据中断引脚不同释放不同的信号量
+  * @param  GPIO_Pin: GPIO引脚
+  * @retval 无
+  */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -240,6 +252,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+/**
+  * @brief  LED任务函数，根据从事件组中获取的事件控制LED的状态
+  * @param  pvParameters: 参数
+  * @retval None
+  */
 void LED_Task(void *pvParameters)
 {
     Led_Init();
@@ -268,6 +285,11 @@ void LED_Task(void *pvParameters)
     }
 }
 
+/**
+  * @brief  传感器任务函数，定时读取DHT11和光照传感器的数据，将数据发送到队列，并通过任务通知将数据发送给控制风扇和LED的任务
+  * @param  pvParameters: 参数
+  * @retval None
+  */
 void Sensor_Task(void *pvParameters)
 {
   DHT11_Init();
@@ -287,6 +309,8 @@ void Sensor_Task(void *pvParameters)
         buf.all_data.dht = result;
 
         xQueueSend(Sensor_Queue,&buf,Queue_Timeout);
+        MQTT_Post("temp",(char)buf.all_data.dht.temp);
+        MQTT_Post("humi",(char)buf.all_data.dht.humi);
 
         if(ControlFanTaskHandle != NULL)
         {
@@ -300,6 +324,7 @@ void Sensor_Task(void *pvParameters)
         buf.all_data.light = pdata;
 
         xQueueSend(Sensor_Queue,&buf,Queue_Timeout);
+        MQTT_Post("light",(char)buf.all_data.light.data);
 
         if(ControlLedTaskHandle != NULL)
         {
@@ -312,6 +337,11 @@ void Sensor_Task(void *pvParameters)
   }
 }
 
+/**
+  * @brief  显示任务函数，从队列中接收传感器数据并在OLED上显示
+  * @param  pvParameters: 参数
+  * @retval None
+  */
 void Display_Task(void *pvParameters)
 {
   OLED_Clear();
@@ -342,6 +372,13 @@ void Display_Task(void *pvParameters)
   }
 }
 
+/**
+  * @brief  按键任务函数，处理按键输入并触发相应事件：
+  *         长按第二个按键切换风扇的自动/手动模式，短按第二个按键在手动模式下切换风扇的档位，
+  *         按下第一个按键触发LED状态切换事件
+  * @param  pvParameters: 参数
+  * @retval None
+  */
 void Key_Task(void *pvParameters)
 {
   Key_Init();
@@ -390,6 +427,11 @@ void Key_Task(void *pvParameters)
   }
 }
 
+/**
+  * @brief  控制LED任务函数，根据从任务通知中接收的数据控制LED状态
+  * @param  pvParameters: 参数
+  * @retval None
+  */
 void Control_Led_Task(void *pvParameters)
 {
   const int light_low = 10;
@@ -414,6 +456,11 @@ void Control_Led_Task(void *pvParameters)
 
 }
 
+/**
+  * @brief  控制风扇任务函数，根据从任务通知中接收的数据控制风扇状态
+  * @param  pvParameters: 参数
+  * @retval None
+  */
 void Control_Fan_Task(void *pvParameters)
 {
     uint32_t notify_data;
@@ -432,6 +479,15 @@ void Control_Fan_Task(void *pvParameters)
     }
 }
 
-
+void Connect_Wifi_Task(void *pvParameters)
+{
+    ESP8266_Init();
+    MQTT_Init();
+    while(1)
+    {
+        ESP8266_RxCheck();
+        vTaskDelay(100);
+    }
+}
 /* USER CODE END Application */
 
