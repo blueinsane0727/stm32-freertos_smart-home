@@ -9,6 +9,8 @@
 USART_Rx_Buf ESP8266_Rxbuf = {0};
 uint8_t Esp_Dma_Rxbuf[Esp_Dma_Rxbuf_Size];
 static uint16_t old_pos = 0;
+volatile uint8_t connect_wifi_flag = 0;
+extern TaskHandle_t ConnectWifiTaskHandle;
 
 /************构建环形缓冲区***********/
 /**
@@ -16,7 +18,7 @@ static uint16_t old_pos = 0;
   * @param  rb: 指向要初始化的 USART_Rx_Buf 结构体的指针
   * @retval 无
   */
-static Buffer_Init(USART_Rx_Buf *rb)
+static void Buffer_Init(USART_Rx_Buf *rb)
 {
     rb->head = 0;
     rb->tail = 0;   
@@ -26,9 +28,9 @@ static Buffer_Init(USART_Rx_Buf *rb)
   * @brief  向环形缓冲区写入一个字节数据
   * @param  rb: 指向 USART_Rx_Buf 结构体的指针
   * @param  data: 要写入的数据
-  * @retval 成功返回 Work_Ok，缓冲区满则返回 Error
+  * @retval 无
   */
-static Buffer_Write(USART_Rx_Buf *rb,uint8_t data)
+static void Buffer_Write(USART_Rx_Buf *rb,uint8_t data)
 {
     uint16_t next_head = (rb->head + 1) % Rx_Buf_Size;
     if(next_head == rb->tail)
@@ -46,7 +48,7 @@ static Buffer_Write(USART_Rx_Buf *rb,uint8_t data)
   * @param  data: 指向用于存储读出数据的变量的指针
   * @retval 成功返回 Work_Ok，缓冲区空则返回 Error
   */
-static Buffer_Read(USART_Rx_Buf *rb,uint8_t *data)
+static ESP8266_Status Buffer_Read(USART_Rx_Buf *rb,uint8_t *data)
 {
     if(rb->head == rb->tail)
     {
@@ -62,7 +64,7 @@ static Buffer_Read(USART_Rx_Buf *rb,uint8_t *data)
   * @param  rb: 指向 USART_Rx_Buf 结构体的指针
   * @retval 缓冲区中有效数据的个数
   */
-static Buffer_GetCount(USART_Rx_Buf *rb)
+static uint16_t Buffer_GetCount(USART_Rx_Buf *rb)
 {
     if(rb->head >= rb->tail)
     {
@@ -78,7 +80,7 @@ static Buffer_GetCount(USART_Rx_Buf *rb)
   * @param  rb: 指向要清空的 USART_Rx_Buf 结构体的指针
   * @retval 无
   */
-static Buffer_Clear(USART_Rx_Buf *rb)
+static void Buffer_Clear(USART_Rx_Buf *rb)
 {
     rb->head = 0;
     rb->tail = 0;
@@ -294,7 +296,8 @@ ESP8266_Status MQTT_Init(void)
 
 /**
   * @brief  通过MQTT发布属性消息到OneNet平台
-  * @note   构造JSON格式的属性上报消息并通过MQTT发布
+  * @note   构造JSON格式的属性上报消息并通过MQTT发布,同时实现简单的重试机制：
+  *         如果发布失败则重试最多3次，超过3次则认为连接丢失并通知连接任务重新连接Wi-Fi
   * @param  param: 要上报的属性名（如"temp"、"humi"等）
   * @param  value: 要上报的属性值（如"25.5"、"true"、"false"等）
   * @retval ESP8266_Status: Work_Ok表示发布成功，Error表示发布失败
@@ -303,8 +306,13 @@ ESP8266_Status MQTT_Post(const char *param,const char *value)
 {
     char buffer[156];
     static uint8_t count = 0;
+    static uint8_t fail_count = 0;
     ESP8266_Status status = Work_Ok;
 
+    if(connect_wifi_flag == 0)
+    {
+        return Error;
+    }
     count++;
     
     snprintf(buffer,sizeof(buffer),"AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"%d\\\"\\,\\\"params\\\":{\\\"%s\\\":{\\\"value\\\":%s\\}}}\",0,0\r\n", count, param, value);
@@ -314,6 +322,21 @@ ESP8266_Status MQTT_Post(const char *param,const char *value)
         if(ESP8266_SendCmdAndWait(buffer,"success",Esp_Timeout) != Work_Ok)
         {
             status = Error;
+            fail_count++;
+
+            if(fail_count >= 3)
+            {
+                connect_wifi_flag = 0;
+                fail_count = 0;
+                if(ConnectWifiTaskHandle != NULL)
+                {
+                    xTaskNotify(ConnectWifiTaskHandle,0,eNoAction);
+                }
+
+            }
+        }else
+        {
+            fail_count = 0;
         }
         xSemaphoreGive(Post_Mutex);
     }else
