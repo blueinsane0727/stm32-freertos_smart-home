@@ -29,19 +29,19 @@ void Key_Fan(void)
 	switch(mode)
 	{
 		case Off_Mode:
-			Motor_SetMode(Off_Mode);
+			Fan_SetMode(Off_Mode);
 			break;
 		
 		case Low_Mode:
-			Motor_SetMode(Low_Mode);
+			Fan_SetMode(Low_Mode);
 			break;
 		
 		case Mid_Mode:
-			Motor_SetMode(Mid_Mode);
+			Fan_SetMode(Mid_Mode);
 			break;
 		
 		case Fast_Mode:
-			Motor_SetMode(Fast_Mode);
+			Fan_SetMode(Fast_Mode);
 			break;
 		
 	}

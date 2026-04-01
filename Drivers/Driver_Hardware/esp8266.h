@@ -1,9 +1,15 @@
 #ifndef _ESP8266_H
 #define _ESP8266_H
 
+#include <string.h>
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
+#include <stdio.h>
+
 #define Rx_Buf_Size         512
 #define Esp_Dma_Rxbuf_Size  256
-#define Esp_Timeout         500
+#define Esp_Timeout         3000
 
 #define Wifi_Name           "klee"
 #define Wifi_Word           "Abcd1007"
@@ -14,7 +20,7 @@
 #define ONENET_Reply        "$sys/" Product_ID "/" Equipment_Name "/thing/property/post/reply"
 #define ESP8266_Post        "$sys/" Product_ID "/" Equipment_Name "/thing/property/post"
 #define ESP8266_Set         "$sys/" Product_ID "/" Equipment_Name "/thing/property/set_reply" 
-#define Host                "218.201.45.7"
+#define Host                "mqtts.heclouds.com"
 
 typedef struct 
 {

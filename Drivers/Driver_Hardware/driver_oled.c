@@ -139,6 +139,7 @@ static int OLED_WriteData(uint8_t data)
  */
 static int OLED_WriteNBytes(uint8_t *buf, uint16_t length)
 {
+    if (length == 0) return 0;
     return HAL_I2C_Mem_Write(g_pHI2COLED, OELD_I2C_ADDR, 0x40, 1, buf, length, OLED_TIMEOUT);
 }
 
@@ -505,6 +506,10 @@ void OLED_PutChar(uint8_t x, uint8_t y, char c)
     if (y > 7 || x > 15)
         return;
     
+    // 如果字符越界（非可打印ASCII范围），比如超出字体数组范围
+    if (c < ' ' || c > '~') 
+        c = ' '; // 替换为空格以防数组越界卡死
+    
     OLED_SetPosition(page, col);
     OLED_WriteNBytes((uint8_t*)&ascii_font[c][0], 8);
     
@@ -524,7 +529,7 @@ void OLED_PutChar(uint8_t x, uint8_t y, char c)
 int OLED_PrintString(uint8_t x, uint8_t y, const char *str)
 {   
     int i = 0;
-    while (str[i])
+    while (str[i] != '\0')
     {
         OLED_PutChar(x, y, str[i]);
         x++;
@@ -533,6 +538,8 @@ int OLED_PrintString(uint8_t x, uint8_t y, const char *str)
             x  = 0;
             y += 2;
         }
+        
+        if (y > 7) break; // 防止死循环写到屏幕外面去，导致不断翻页覆盖
                 
         i++;
     }
@@ -667,14 +674,21 @@ void OLED_PrintFloat(uint8_t x,uint8_t y,float val,uint8_t accuracy)
     temp_int = (long)val;
     OLED_PrintSignedVal(x,y,temp_int);
 
-    temp_calc_len = temp_int;
-    /*计算位数和光标*/
-    for(num = 1;temp_calc_len >= 10;num++)
-    {
-        temp_calc_len /= 10;
+    /* 直接使用简单的 while 循环计算位数，防止 for 循环发生异常行为 */
+    long abs_temp_int = temp_int;
+    if (abs_temp_int < 0) {
+        abs_temp_int = -abs_temp_int;
     }
+    
+    num = 1;         // 至少 1 位（0也是1位）
+    while (abs_temp_int >= 10) 
+    {
+        num++;
+        abs_temp_int /= 10;
+    }
+
     x = x + num;
-    OLED_PrintString(x,y,".");
+    OLED_PutChar(x, y, '.');
     x++;
 
     /*显示小数部分*/

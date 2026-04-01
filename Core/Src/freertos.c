@@ -36,6 +36,7 @@
 #include "driver_oled.h"
 #include "driver_motor.h"
 #include "esp8266.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -111,6 +112,7 @@ void Display_Task(void *pvParameters);
 void Key_Task(void *pvParameters);
 void Control_Led_Task(void *pvParameters);
 void Control_Fan_Task(void *pvParameters);
+void Connect_Wifi_Task(void *pvParameters);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -189,11 +191,11 @@ void StartDefaultTask(void *argument)
             (void* )NULL, 
             (UBaseType_t )4,
             (TaskHandle_t* )&SensorTaskHandle);
-	xTaskCreate((TaskFunction_t)Display_Task,
+	xResult = xTaskCreate((TaskFunction_t)Display_Task,
             (const char* )"Display_Task", 
             (uint16_t )128, 
             (void* )NULL, 
-            (UBaseType_t )5,
+            (UBaseType_t )3,
             (TaskHandle_t* )&DisplayTaskHandle);
   xTaskCreate((TaskFunction_t)Key_Task,
             (const char* )"Key_Task", 
@@ -217,9 +219,12 @@ void StartDefaultTask(void *argument)
             (const char* )"Connect_Wifi_Task", 
             (uint16_t )256, 
             (void* )NULL, 
-            (UBaseType_t )5,
+            (UBaseType_t )6,
             (TaskHandle_t* )&ConnectWifiTaskHandle);
-
+  if(xResult != pdPASS)
+  {
+      OLED_PrintString(0,6,"Create Failed!");
+  }
 	vTaskDelete(NULL); 
   /* Infinite loop */
   for(;;)
@@ -300,6 +305,7 @@ void Sensor_Task(void *pvParameters)
   light_data pdata;
   uint32_t notify_data;
   int light_notify_data;
+  char val_str[16];
 
   while(1)
   {
@@ -309,8 +315,13 @@ void Sensor_Task(void *pvParameters)
         buf.all_data.dht = result;
 
         xQueueSend(Sensor_Queue,&buf,Queue_Timeout);
-        MQTT_Post("temp",(char)buf.all_data.dht.temp);
-        MQTT_Post("humi",(char)buf.all_data.dht.humi);
+        
+        snprintf(val_str, sizeof(val_str), "%.1f", buf.all_data.dht.temp);
+        MQTT_Post("temp",val_str);
+		vTaskDelay(pdMS_TO_TICKS(200));
+        snprintf(val_str, sizeof(val_str), "%.1f", buf.all_data.dht.humi);
+        MQTT_Post("humi",val_str); 
+		vTaskDelay(pdMS_TO_TICKS(200));
 
         if(ControlFanTaskHandle != NULL)
         {
@@ -324,7 +335,10 @@ void Sensor_Task(void *pvParameters)
         buf.all_data.light = pdata;
 
         xQueueSend(Sensor_Queue,&buf,Queue_Timeout);
-        MQTT_Post("light",(char)buf.all_data.light.data);
+
+        snprintf(val_str, sizeof(val_str), "%d", buf.all_data.light.data);
+        MQTT_Post("light",val_str);
+		vTaskDelay(pdMS_TO_TICKS(200));
 
         if(ControlLedTaskHandle != NULL)
         {
@@ -408,7 +422,7 @@ void Key_Task(void *pvParameters)
           uint32_t press_start_tick = xTaskGetTickCount();
           while(HAL_GPIO_ReadPin(Key_Port,Key2_Pin) == 0)
           {
-              xTaskDelay(10);
+              vTaskDelay(10);
           }
           uint32_t press_time = xTaskGetTickCount() - press_start_tick;
           if(press_time >= 2000)
@@ -436,7 +450,7 @@ void Control_Led_Task(void *pvParameters)
 {
   const int light_low = 10;
   const int light_high = 90;
-  int notify_data;
+  uint32_t notify_data;
   BaseType_t Result;
 
   while(1)
@@ -466,6 +480,12 @@ void Control_Fan_Task(void *pvParameters)
     uint32_t notify_data;
     BaseType_t Result;
     float current_temp;
+    
+    Motor_Mode target_mode = Off_Mode;
+    Motor_Mode last_target_mode = Off_Mode;
+    Motor_Mode current_mode = Off_Mode;
+    uint8_t filter_count = 0;
+
     Fan_AppInit();
     while(1)
     {
@@ -473,7 +493,47 @@ void Control_Fan_Task(void *pvParameters)
         if(Result == pdTRUE)
         {
             current_temp = notify_data / 10.0f;
-            Fan_AutoControl(current_temp);
+            
+            // 1. 迟滞逻辑计算理想目标档位（死区设置在 20~26 ℃）
+            if (current_temp < 20.0f) {
+                target_mode = Off_Mode;
+            } else if (current_temp <= 26.0f) {
+                if (current_mode == Off_Mode) {
+                    target_mode = Off_Mode;  // 如果风扇还没开，保持关闭
+                } else {
+                    target_mode = Low_Mode;  // 如果风扇已在转，保持低速运转不死机
+                }
+            } else if (current_temp < 30.0f) {
+                target_mode = Low_Mode;
+            } else if (current_temp < 32.0f) {
+                target_mode = Mid_Mode;
+            } else {
+                target_mode = Fast_Mode;
+            }
+
+            // 2. 软件时间滤波并在自动模式下执行
+            if (Fan_GetControlMode() == Fan_Auto) {
+                if (target_mode != current_mode) {
+                    // 如果连续多次判定结果为同一目标模式，计数累加
+                    if (target_mode == last_target_mode) {
+                        filter_count++;
+                        if (filter_count >= 5) {  // 约连续5次(5秒左右)满足条件才真正切换
+                            current_mode = target_mode;
+                            Fan_SetMode(current_mode);
+                            filter_count = 0;
+                        }
+                    } else {
+                        last_target_mode = target_mode;
+                        filter_count = 1;
+                    }
+                } else {
+                    filter_count = 0;
+                }
+            } else {
+                // 手动模式下重置状态，此处赋一个无效值保证切回自动模式后能立即重新评估并恢复
+                filter_count = 0;
+                current_mode = (Motor_Mode)0xFF;
+            }
         }
 
     }
@@ -482,10 +542,12 @@ void Control_Fan_Task(void *pvParameters)
 void Connect_Wifi_Task(void *pvParameters)
 {
     ESP8266_Init();
+	extern volatile uint8_t connect_wifi_flag;
     while(MQTT_Init() != Work_Ok)
     {
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
+	connect_wifi_flag = 1;
     while(1)
     {
         BaseType_t Result = xTaskNotifyWait(0x00,0xffffffff,NULL,portMAX_DELAY);
@@ -498,7 +560,7 @@ void Connect_Wifi_Task(void *pvParameters)
             }
 
             extern volatile uint8_t connect_wifi_flag;
-            connect_wifi_flag = 0;
+            connect_wifi_flag = 1;
         }
     }
 }

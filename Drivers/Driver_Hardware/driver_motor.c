@@ -5,7 +5,7 @@ static Motor_Mode fanstate = Off_Mode;
 static Fan_ControlState fan_control = Fan_Auto;
 
 /***********µç»úÇý¶¯²ã***********/
-static  Motor_Init(void)
+static void Motor_Init(void)
 {
 	HAL_GPIO_WritePin(Motor_Port, Motor_PWM_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(Motor_Port, Motor_AIN1_Pin, GPIO_PIN_RESET);	
@@ -28,7 +28,7 @@ static  Motor_Init(void)
     HAL_GPIO_Init(Motor_Port, &GPIO_InitStruct);
 }
 
-static Motor_SetMode(Motor_Mode mode)
+static void Motor_SetMode(Motor_Mode mode)
 {
 	TIM_OC_InitTypeDef sConfigOC = {0};
 	

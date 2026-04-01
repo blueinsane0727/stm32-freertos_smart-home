@@ -1,10 +1,6 @@
 #include "stm32f1xx_hal.h"
 #include "esp8266.h"
-#include <string.h>
-#include "FreeRTOS.h"
-#include "task.h"
-#include "semphr.h"
-#include <stdio.h>
+
 
 USART_Rx_Buf ESP8266_Rxbuf = {0};
 uint8_t Esp_Dma_Rxbuf[Esp_Dma_Rxbuf_Size];
@@ -30,7 +26,7 @@ static void Buffer_Init(USART_Rx_Buf *rb)
   * @param  data: 要写入的数据
   * @retval 无
   */
-static void Buffer_Write(USART_Rx_Buf *rb,uint8_t data)
+static ESP8266_Status Buffer_Write(USART_Rx_Buf *rb,uint8_t data)
 {
     uint16_t next_head = (rb->head + 1) % Rx_Buf_Size;
     if(next_head == rb->tail)
@@ -95,6 +91,8 @@ static void Buffer_Clear(USART_Rx_Buf *rb)
   */
 void ESP8266_Init(void)
 {
+    HAL_Delay(1000);
+    __HAL_UART_CLEAR_OREFLAG(&huart1);
     Buffer_Init(&ESP8266_Rxbuf);
     HAL_UART_Receive_DMA(&huart1,Esp_Dma_Rxbuf,Esp_Dma_Rxbuf_Size);
     __HAL_UART_ENABLE_IT(&huart1,UART_IT_IDLE);
@@ -272,7 +270,7 @@ ESP8266_Status MQTT_Get(const char *param,const char *value)
 ESP8266_Status MQTT_Init(void)
 {
     /* 1 复位指令 */
-    if(ESP8266_SendCmdAndWait("AT+RST","OK",Esp_Timeout) != Work_Ok)return Error;
+    if(ESP8266_SendCmdAndWait("AT+RST","OK",5000) != Work_Ok)return Error;
     /* 2 设置为station模式 */
     if(ESP8266_SendCmdAndWait("AT+CWMODE=1","OK",Esp_Timeout) != Work_Ok)return Error;
     /* 3 启动DHCP，自动获取地址 */
@@ -282,7 +280,7 @@ ESP8266_Status MQTT_Init(void)
     /* 5 配置MQTT用户信息：设备名称，产品id，Token */
     if(ESP8266_SendCmdAndWait("AT+MQTTUSERCFG=0,1,\"" Equipment_Name "\",\"" Product_ID "\",\"" MQTT_Token "\",0,0,\"\"","OK",Esp_Timeout) != Work_Ok)return Error;
     /* 6 建立MQTT连接，配置域名和端口号 */
-    if(ESP8266_SendCmdAndWait("AT+MQTTCONN=\"" Host "\",1883,1","OK",Esp_Timeout) != Work_Ok)return Error;
+    if(ESP8266_SendCmdAndWait("AT+MQTTCONN=0,\"" Host "\",1883,1","OK",10000) != Work_Ok)return Error;
     /* 7 订阅主题：用于接收服务器对客户端发布消息的回复 */
     if(ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Reply "\",1","OK",Esp_Timeout) != Work_Ok)return Error;
     /* 8 订阅主题：用于接收服务器下发的属性设置命令 */
@@ -315,7 +313,7 @@ ESP8266_Status MQTT_Post(const char *param,const char *value)
     }
     count++;
     
-    snprintf(buffer,sizeof(buffer),"AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"%d\\\"\\,\\\"params\\\":{\\\"%s\\\":{\\\"value\\\":%s\\}}}\",0,0\r\n", count, param, value);
+    snprintf(buffer,sizeof(buffer),"AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"%d\\\"\\,\\\"params\\\":{\\\"%s\\\":{\\\"value\\\":%s\\}}}\",0,0", count, param, value);
 
     if(xSemaphoreTake(Post_Mutex,2000) == pdTRUE)
     {
