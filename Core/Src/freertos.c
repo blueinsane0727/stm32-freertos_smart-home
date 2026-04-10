@@ -59,6 +59,10 @@ typedef struct
   }all_data;
 }sensor_data;   
 
+typedef struct {
+    char topic[16];   // 主题，例如 "temp", "humi", "light", "led", "fan"
+    char payload[16]; // 数据负载，例如 "25.0", "on", "1"
+} post_msg_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -77,6 +81,8 @@ TaskHandle_t KeyTaskHandle;
 TaskHandle_t ControlLedTaskHandle = NULL;
 TaskHandle_t ControlFanTaskHandle = NULL;
 TaskHandle_t ConnectWifiTaskHandle = NULL;
+TaskHandle_t FanTaskHandle = NULL;
+TaskHandle_t PostTaskHandle = NULL;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -88,6 +94,7 @@ TaskHandle_t ConnectWifiTaskHandle = NULL;
 /* USER CODE BEGIN Variables */
 QueueHandle_t Sensor_Queue;           // 传感器数据队列句柄
 QueueHandle_t Key_Queueset;           // 按键事件队列集句柄
+QueueHandle_t Post_Queue = NULL;      // 新增上报数据队列
 
 SemaphoreHandle_t Key1_Semaphore;     // 按键1信号量
 SemaphoreHandle_t Key2_Semaphore;     // 按键2信号量
@@ -113,6 +120,8 @@ void Key_Task(void *pvParameters);
 void Control_Led_Task(void *pvParameters);
 void Control_Fan_Task(void *pvParameters);
 void Connect_Wifi_Task(void *pvParameters);
+void Fan_Task(void *pvParameters);
+void Post_Task(void *pvParameters);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -151,6 +160,8 @@ void MX_FREERTOS_Init(void) {
   Key_Queueset = xQueueCreateSet(2);
   xQueueAddToSet(Key1_Semaphore,Key_Queueset);
   xQueueAddToSet(Key2_Semaphore,Key_Queueset);
+
+  Post_Queue = xQueueCreate(10, sizeof(post_msg_t));
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -191,7 +202,7 @@ void StartDefaultTask(void *argument)
             (void* )NULL, 
             (UBaseType_t )4,
             (TaskHandle_t* )&SensorTaskHandle);
-	xResult = xTaskCreate((TaskFunction_t)Display_Task,
+	xTaskCreate((TaskFunction_t)Display_Task,
             (const char* )"Display_Task", 
             (uint16_t )128, 
             (void* )NULL, 
@@ -215,7 +226,19 @@ void StartDefaultTask(void *argument)
             (void* )NULL, 
             (UBaseType_t )5,
             (TaskHandle_t* )&ControlFanTaskHandle);
-  xTaskCreate((TaskFunction_t)Connect_Wifi_Task,
+  xTaskCreate((TaskFunction_t)Fan_Task,
+            (const char* )"Fan_Task", 
+            (uint16_t )128, 
+            (void* )NULL, 
+            (UBaseType_t )5,
+            (TaskHandle_t* )&FanTaskHandle);
+  xTaskCreate((TaskFunction_t)Post_Task,
+            (const char* )"Post_Task", 
+            (uint16_t )256, 
+            (void* )NULL, 
+            (UBaseType_t )4,
+            (TaskHandle_t* )&PostTaskHandle);
+  xResult = xTaskCreate((TaskFunction_t)Connect_Wifi_Task,
             (const char* )"Connect_Wifi_Task", 
             (uint16_t )256, 
             (void* )NULL, 
@@ -223,9 +246,9 @@ void StartDefaultTask(void *argument)
             (TaskHandle_t* )&ConnectWifiTaskHandle);
   if(xResult != pdPASS)
   {
-      OLED_PrintString(0,6,"Create Failed!");
+    OLED_PrintString(0,6,"Task Failed!");    
   }
-	vTaskDelete(NULL); 
+  vTaskDelete(NULL);
   /* Infinite loop */
   for(;;)
   {
@@ -268,6 +291,7 @@ void LED_Task(void *pvParameters)
 
     EventBits_t xbit;
     const EventBits_t AllBits = Event_Light_Turn | Event_Light_On | Event_Light_Off;
+    post_msg_t msg;
 
     while(1)
     {       
@@ -276,16 +300,25 @@ void LED_Task(void *pvParameters)
         if((xbit & Event_Light_Turn) != 0)
         {
           Led_Turn();
+          snprintf(msg.topic, sizeof(msg.topic), "led");
+          snprintf(msg.payload, sizeof(msg.payload), "toggle");
+          xQueueSend(Post_Queue, &msg, Queue_Timeout);
         }
 
         if((xbit & Event_Light_On) != 0)
         {
           Led_On();
+          snprintf(msg.topic, sizeof(msg.topic), "led");
+          snprintf(msg.payload, sizeof(msg.payload), "on");
+          xQueueSend(Post_Queue, &msg, Queue_Timeout);
         }
 
         if((xbit & Event_Light_Off) != 0)
         {
           Led_Off();
+          snprintf(msg.topic, sizeof(msg.topic), "led");
+          snprintf(msg.payload, sizeof(msg.payload), "off");
+          xQueueSend(Post_Queue, &msg, Queue_Timeout);
         }
     }
 }
@@ -305,23 +338,24 @@ void Sensor_Task(void *pvParameters)
   light_data pdata;
   uint32_t notify_data;
   int light_notify_data;
-  char val_str[16];
 
   while(1)
   {
     if(DHT11_Read_Result(&result) == DHT11_TRUE)
     {
+        post_msg_t msg;
         buf.type = data_type_dht11;
         buf.all_data.dht = result;
 
         xQueueSend(Sensor_Queue,&buf,Queue_Timeout);
         
-        snprintf(val_str, sizeof(val_str), "%.1f", buf.all_data.dht.temp);
-        MQTT_Post("temp",val_str);
-		vTaskDelay(pdMS_TO_TICKS(200));
-        snprintf(val_str, sizeof(val_str), "%.1f", buf.all_data.dht.humi);
-        MQTT_Post("humi",val_str); 
-		vTaskDelay(pdMS_TO_TICKS(200));
+        snprintf(msg.topic, sizeof(msg.topic), "temp");
+        snprintf(msg.payload, sizeof(msg.payload), "%.1f", buf.all_data.dht.temp);
+        xQueueSend(Post_Queue, &msg, Queue_Timeout);
+        
+        snprintf(msg.topic, sizeof(msg.topic), "humi");
+        snprintf(msg.payload, sizeof(msg.payload), "%.1f", buf.all_data.dht.humi);
+        xQueueSend(Post_Queue, &msg, Queue_Timeout);
 
         if(ControlFanTaskHandle != NULL)
         {
@@ -331,14 +365,15 @@ void Sensor_Task(void *pvParameters)
     }
     if(LightSensor_Read(&pdata) == Light_OK)
     {
+        post_msg_t msg;
         buf.type = data_type_light;
         buf.all_data.light = pdata;
 
         xQueueSend(Sensor_Queue,&buf,Queue_Timeout);
 
-        snprintf(val_str, sizeof(val_str), "%d", buf.all_data.light.data);
-        MQTT_Post("light",val_str);
-		vTaskDelay(pdMS_TO_TICKS(200));
+        snprintf(msg.topic, sizeof(msg.topic), "light");
+        snprintf(msg.payload, sizeof(msg.payload), "%d", buf.all_data.light.data);
+        xQueueSend(Post_Queue, &msg, Queue_Timeout);
 
         if(ControlLedTaskHandle != NULL)
         {
@@ -420,25 +455,38 @@ void Key_Task(void *pvParameters)
       if((currentState == 0) &&(lastStateB == 1))
       {
           uint32_t press_start_tick = xTaskGetTickCount();
+          uint32_t press_time;
+          post_msg_t msg;
           while(HAL_GPIO_ReadPin(Key_Port,Key2_Pin) == 0)
           {
               vTaskDelay(10);
           }
-          uint32_t press_time = xTaskGetTickCount() - press_start_tick;
+          press_time = xTaskGetTickCount() - press_start_tick;
+          
           if(press_time >= 2000)
           {
               Fan_SetControlMode(Fan_Auto);
+              snprintf(msg.topic, sizeof(msg.topic), "fan_mode");
+              snprintf(msg.payload, sizeof(msg.payload), "auto");
+              xQueueSend(Post_Queue, &msg, Queue_Timeout);
           }else
           {
-              Fan_SetControlMode(Fan_Manual);
-              Fan_SwitchNextMode();
-          }
-          
+                Motor_Mode next_mode;
+                Fan_SetControlMode(Fan_Manual);
+                next_mode = Fan_GetNextMode(Fan_GetMode());
+                if (FanTaskHandle != NULL)
+                {
+                    xTaskNotify(FanTaskHandle, (uint32_t)next_mode, eSetValueWithOverwrite);
+                }
+                snprintf(msg.topic, sizeof(msg.topic), "fan_mode");
+                snprintf(msg.payload, sizeof(msg.payload), "manual");
+                xQueueSend(Post_Queue, &msg, Queue_Timeout);
+            }
+        }
+        lastStateB = currentState;
+        xSemaphoreTake(Key2_Semaphore,0);
       }
-      lastStateB = currentState;
-      xSemaphoreTake(Key2_Semaphore,0);
     }
-  }
 }
 
 /**
@@ -486,7 +534,6 @@ void Control_Fan_Task(void *pvParameters)
     Motor_Mode current_mode = Off_Mode;
     uint8_t filter_count = 0;
 
-    Fan_AppInit();
     while(1)
     {
         Result = xTaskNotifyWait(0x00,0xffffffff,&notify_data,portMAX_DELAY);
@@ -519,7 +566,10 @@ void Control_Fan_Task(void *pvParameters)
                         filter_count++;
                         if (filter_count >= 5) {  // 约连续5次(5秒左右)满足条件才真正切换
                             current_mode = target_mode;
-                            Fan_SetMode(current_mode);
+                            if (FanTaskHandle != NULL)
+                            {
+                                xTaskNotify(FanTaskHandle, (uint32_t)current_mode, eSetValueWithOverwrite);
+                            }
                             filter_count = 0;
                         }
                     } else {
@@ -561,6 +611,46 @@ void Connect_Wifi_Task(void *pvParameters)
 
             extern volatile uint8_t connect_wifi_flag;
             connect_wifi_flag = 1;
+        }
+    }
+}
+
+void Fan_Task(void *pvParameters)
+{
+    uint32_t notify_data;
+    BaseType_t Result;
+    Motor_Mode target_mode;
+    post_msg_t msg;
+
+    Fan_AppInit();
+
+    while(1)
+    {
+        Result = xTaskNotifyWait(0x00, 0xffffffff, &notify_data, portMAX_DELAY);
+        if(Result == pdTRUE)
+        {
+            target_mode = (Motor_Mode)notify_data;
+            Fan_SetMode(target_mode);
+
+            snprintf(msg.topic, sizeof(msg.topic), "fan");
+            snprintf(msg.payload, sizeof(msg.payload), "%d", target_mode);
+            xQueueSend(Post_Queue, &msg, Queue_Timeout);
+        }
+    }
+}
+
+void Post_Task(void *pvParameters)
+{
+    post_msg_t msg;
+    while(1)
+    {
+        if(xQueueReceive(Post_Queue, &msg, portMAX_DELAY) == pdTRUE)
+        {
+            xSemaphoreTake(Post_Mutex, portMAX_DELAY);
+            MQTT_Post(msg.topic, msg.payload);
+            xSemaphoreGive(Post_Mutex);
+            
+            vTaskDelay(pdMS_TO_TICKS(100)); // 避免云端限流
         }
     }
 }

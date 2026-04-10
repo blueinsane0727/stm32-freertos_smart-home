@@ -8,6 +8,7 @@ static uint16_t old_pos = 0;
 volatile uint8_t connect_wifi_flag = 0;
 extern TaskHandle_t ConnectWifiTaskHandle;
 
+
 /************构建环形缓冲区***********/
 /**
   * @brief  初始化环形缓冲区
@@ -31,7 +32,7 @@ static ESP8266_Status Buffer_Write(USART_Rx_Buf *rb,uint8_t data)
     uint16_t next_head = (rb->head + 1) % Rx_Buf_Size;
     if(next_head == rb->tail)
     {
-        return Error;
+        rb->tail = (rb->tail + 1) % Rx_Buf_Size;
     }
     rb->buffer[rb->head] = data;
     rb->head = next_head;
@@ -172,38 +173,60 @@ uint16_t ESP8266_Read(char *rb,uint16_t len)
   * @param  timeout: 等待超时时间（毫秒）
   * @retval 成功收到预期响应返回 Work_Ok，超时则返回 Error
   */
-static ESP8266_Status ESP8266_SendCmdAndWait(const char *cmd,const char *expected_response,uint32_t timeout)
+static ESP8266_Status ESP8266_SendCmdAndWait(const char *cmd, const char *expected_response, uint32_t timeout)
 {
+    // 1. 参数检查
+    if (expected_response == NULL || strlen(expected_response) == 0)
+    {
+        return Error;
+    }
+
+    // 2. 发送指令前，清空接收缓冲区
     Buffer_Clear(&ESP8266_Rxbuf);
     ESP8266_SendCmd(cmd);
 
-    char rx_str[256] = {0};
-    uint16_t rx_index = 0;
+    static char rx_buffer[TEMP_RX_BUF_SIZE] = {0};
+    static uint16_t rx_index = 0; // 当前累积数据的位置
+
+    rx_index = 0;
+    rx_buffer[0] = '\0';
 
     TickType_t start_time = xTaskGetTickCount();
     TickType_t timeout_tick = pdMS_TO_TICKS(timeout);
 
-    while(xTaskGetTickCount() - start_time <timeout_tick)
+    // 4. 等待并处理
+    while (xTaskGetTickCount() - start_time < timeout_tick)
     {
-        if(xSemaphoreTake(Esp_RxSem,pdMS_TO_TICKS(50)) == pdTRUE)
+        if (xSemaphoreTake(Esp_RxSem, pdMS_TO_TICKS(50)) == pdTRUE)
         {
-            uint8_t data;
-            while (Buffer_Read(&ESP8266_Rxbuf,&data) == Work_Ok)
+            uint8_t data_byte;
+            // 5. 从环形缓冲区读取所有可用字节
+            while (Buffer_Read(&ESP8266_Rxbuf, &data_byte) == Work_Ok)
             {
-                if(rx_index < sizeof(rx_str) - 1)
+                // 6. 将字节存入临时缓冲区，但防止溢出
+                if (rx_index < (TEMP_RX_BUF_SIZE - 1))
                 {
-                    rx_str[rx_index++] = data;
-                    rx_str[rx_index] = '\0';
+                    rx_buffer[rx_index++] = (char)data_byte;
+                    rx_buffer[rx_index] = '\0'; // 确保字符串以\0结尾
                 }
-
-                if(strstr(rx_str,expected_response) != NULL)
+                else
                 {
-                    return Work_Ok;
+                    // 缓冲区溢出，可以丢弃最早的数据或直接报错。这里选择丢弃最早数据（简单覆盖）。
+                    // 更稳妥的做法是增大 TEMP_RX_BUF_SIZE 或使用循环存储策略。
+                    memmove(rx_buffer, rx_buffer + 1, TEMP_RX_BUF_SIZE - 2);
+                    rx_index--;
+                    rx_buffer[rx_index++] = (char)data_byte;
+                    rx_buffer[rx_index] = '\0';
                 }
             }
-            
+            // 7. 检查累积的数据中是否包含期望的响应
+            if (strstr(rx_buffer, expected_response) != NULL)
+            {
+                return Work_Ok; // 找到，成功返回
+            }
         }
     }
+    // 8. 超时仍未找到
     return Error;
 }
 
@@ -269,26 +292,36 @@ ESP8266_Status MQTT_Get(const char *param,const char *value)
   */
 ESP8266_Status MQTT_Init(void)
 {
-    /* 1 复位指令 */
-    if(ESP8266_SendCmdAndWait("AT+RST","OK",5000) != Work_Ok)return Error;
-    /* 2 设置为station模式 */
-    if(ESP8266_SendCmdAndWait("AT+CWMODE=1","OK",Esp_Timeout) != Work_Ok)return Error;
-    /* 3 启动DHCP，自动获取地址 */
-    if(ESP8266_SendCmdAndWait("AT+CWDHCP=1,1","OK",Esp_Timeout) != Work_Ok)return Error;
-    /* 4 连接wifi */
-    if(ESP8266_SendCmdAndWait("AT+CWJAP=\"" Wifi_Name "\",\"" Wifi_Word "\"","OK",Esp_Timeout) != Work_Ok)return Error;
-    /* 5 配置MQTT用户信息：设备名称，产品id，Token */
-    if(ESP8266_SendCmdAndWait("AT+MQTTUSERCFG=0,1,\"" Equipment_Name "\",\"" Product_ID "\",\"" MQTT_Token "\",0,0,\"\"","OK",Esp_Timeout) != Work_Ok)return Error;
-    /* 6 建立MQTT连接，配置域名和端口号 */
-    if(ESP8266_SendCmdAndWait("AT+MQTTCONN=0,\"" Host "\",1883,1","OK",10000) != Work_Ok)return Error;
-    /* 7 订阅主题：用于接收服务器对客户端发布消息的回复 */
-    if(ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Reply "\",1","OK",Esp_Timeout) != Work_Ok)return Error;
-    /* 8 订阅主题：用于接收服务器下发的属性设置命令 */
-    if(ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Set "\",1","OK",Esp_Timeout) != Work_Ok)return Error;
-    /* 9 发布消息 */
-    if(ESP8266_SendCmdAndWait("AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"123\\\"\\,\\\"params\\\":{\\\"fan\\\":{\\\"value\\\":0\\}}}\",0,0","success",Esp_Timeout) != Work_Ok)return Error;
-    if(ESP8266_SendCmdAndWait("AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"123\\\"\\,\\\"params\\\":{\\\"led\\\":{\\\"value\\\":false\\}}}\",0,0","success",Esp_Timeout) != Work_Ok)return Error;
+//    /* 1 复位指令 */
+//    if(ESP8266_SendCmdAndWait("AT+RST","ready",5000) != Work_Ok);//return Error;
+//    /* 2 设置为station模式 */
+//    if(ESP8266_SendCmdAndWait("AT+CWMODE=1","OK",Esp_Timeout) != Work_Ok);//return Error;
+//    /* 3 启动DHCP，自动获取地址 */
+//    if(ESP8266_SendCmdAndWait("AT+CWDHCP=1,1","OK",Esp_Timeout) != Work_Ok)return Error;
+//    /* 4 连接wifi */
+//    if(ESP8266_SendCmdAndWait("AT+CWJAP=\"" Wifi_Name "\",\"" Wifi_Word "\"","OK",Esp_Timeout) != Work_Ok)return Error;
+//    /* 5 配置MQTT用户信息：设备名称，产品id，Token */
+//    if(ESP8266_SendCmdAndWait("AT+MQTTUSERCFG=0,1,\"" Equipment_Name "\",\"" Product_ID "\",\"" MQTT_Token "\",0,0,\"\"","OK",Esp_Timeout) != Work_Ok)return Error;   
+//    /* 6 建立MQTT连接，配置域名和端口号 */
+//    if(ESP8266_SendCmdAndWait("AT+MQTTCONN=0,\"mqtts.heclouds.com\",1883,1","OK",5000) != Work_Ok)return Error;
+//    /* 7 订阅主题：用于接收服务器对客户端发布消息的回复 */
+//    if(ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Reply "\",1","OK",Esp_Timeout) != Work_Ok)return Error;
+//    /* 8 订阅主题：用于接收服务器下发的属性设置命令 */
+//    if(ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Set "\",1","OK",Esp_Timeout) != Work_Ok)return Error;
+//    /* 9 发布消息 */
+//    if(ESP8266_SendCmdAndWait("AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"123\\\"\\,\\\"params\\\":{\\\"fan\\\":{\\\"value\\\":0\\}}}\",0,0","success",Esp_Timeout) != Work_Ok)return Error;
+//    if(ESP8266_SendCmdAndWait("AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"123\\\"\\,\\\"params\\\":{\\\"led\\\":{\\\"value\\\":false\\}}}\",0,0","success",Esp_Timeout) != Work_Ok)return Error;
 
+	ESP8266_SendCmdAndWait("AT+RST","OK",5000);
+	ESP8266_SendCmdAndWait("AT+CWMODE=1","OK",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+CWDHCP=1,1","OK",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+CWJAP=\"" Wifi_Name "\",\"" Wifi_Word "\"","OK",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+MQTTUSERCFG=0,1,\"" Equipment_Name "\",\"" Product_ID "\",\"" MQTT_Token "\",0,0,\"\"","OK",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+MQTTCONN=0,\"mqtts.heclouds.com\",1883,1","OK",5000);
+	ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Reply "\",1","OK",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+MQTTSUB=0,\"" ONENET_Set "\",1","OK",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"123\\\"\\,\\\"params\\\":{\\\"fan\\\":{\\\"value\\\":0\\}}}\",0,0","success",Esp_Timeout);
+	ESP8266_SendCmdAndWait("AT+MQTTPUB=0,\"" ESP8266_Post "\",\"{\\\"id\\\":\\\"123\\\"\\,\\\"params\\\":{\\\"led\\\":{\\\"value\\\":false\\}}}\",0,0","success",Esp_Timeout);
     return Work_Ok;
 }
 
@@ -317,7 +350,7 @@ ESP8266_Status MQTT_Post(const char *param,const char *value)
 
     if(xSemaphoreTake(Post_Mutex,2000) == pdTRUE)
     {
-        if(ESP8266_SendCmdAndWait(buffer,"success",Esp_Timeout) != Work_Ok)
+        if(ESP8266_SendCmdAndWait(buffer,"OK",Esp_Timeout) != Work_Ok)
         {
             status = Error;
             fail_count++;

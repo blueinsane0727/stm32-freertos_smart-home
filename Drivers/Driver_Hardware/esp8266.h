@@ -6,10 +6,12 @@
 #include "task.h"
 #include "semphr.h"
 #include <stdio.h>
+#include "driver_oled.h"
 
 #define Rx_Buf_Size         512
 #define Esp_Dma_Rxbuf_Size  256
 #define Esp_Timeout         3000
+#define TEMP_RX_BUF_SIZE    1024
 
 #define Wifi_Name           "klee"
 #define Wifi_Word           "Abcd1007"

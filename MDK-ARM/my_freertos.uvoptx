@@ -155,9 +155,9 @@
         <Bp>
           <Number>0</Number>
           <Type>0</Type>
-          <LineNumber>342</LineNumber>
+          <LineNumber>351</LineNumber>
           <EnabledFlag>1</EnabledFlag>
-          <Address>134236094</Address>
+          <Address>134236406</Address>
           <ByteObject>0</ByteObject>
           <HtxType>0</HtxType>
           <ManyObjects>0</ManyObjects>
@@ -166,23 +166,23 @@
           <BreakIfRCount>1</BreakIfRCount>
           <Filename>E:\妗岄潰\椤圭洰\Drivers\Driver_Hardware\esp8266.c</Filename>
           <ExecCommand></ExecCommand>
-          <Expression>\\my_freertos\../Drivers/Driver_Hardware/esp8266.c\342</Expression>
+          <Expression>\\my_freertos\../Drivers/Driver_Hardware/esp8266.c\351</Expression>
         </Bp>
         <Bp>
           <Number>1</Number>
           <Type>0</Type>
-          <LineNumber>500</LineNumber>
+          <LineNumber>223</LineNumber>
           <EnabledFlag>1</EnabledFlag>
-          <Address>134223740</Address>
+          <Address>134225500</Address>
           <ByteObject>0</ByteObject>
           <HtxType>0</HtxType>
           <ManyObjects>0</ManyObjects>
           <SizeOfObject>0</SizeOfObject>
           <BreakByAccess>0</BreakByAccess>
           <BreakIfRCount>1</BreakIfRCount>
-          <Filename>E:\妗岄潰\椤圭洰\Core\Src\freertos.c</Filename>
+          <Filename>E:\妗岄潰\椤圭洰\Drivers\Driver_Hardware\esp8266.c</Filename>
           <ExecCommand></ExecCommand>
-          <Expression>\\my_freertos\../Core/Src/freertos.c\500</Expression>
+          <Expression>\\my_freertos\../Drivers/Driver_Hardware/esp8266.c\223</Expression>
         </Bp>
       </Breakpoint>
       <Tracepoint>
@@ -634,7 +634,7 @@
 
   <Group>
     <GroupName>Drivers/CMSIS</GroupName>
-    <tvExp>1</tvExp>
+    <tvExp>0</tvExp>
     <tvExpOptDlg>0</tvExpOptDlg>
     <cbSel>0</cbSel>
     <RteFlg>0</RteFlg>
